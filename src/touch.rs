@@ -15,11 +15,8 @@
 use core::sync::atomic::Ordering::Relaxed;
 
 use portable_atomic_util::Arc;
-#[cfg(not(feature = "fingerprint"))]
-use wasefire::button;
-#[cfg(feature = "fingerprint")]
-use wasefire::fingerprint as button;
 use wasefire::sync::{AtomicBool, Mutex};
+use wasefire::timer::{self, Timer};
 
 pub(crate) struct Touch {
     touched: Arc<AtomicBool>,
@@ -49,7 +46,7 @@ impl Drop for Touch {
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 struct State {
-    button: button::Listener<Handler>,
+    _timer: Timer<Handler>,
     _blink: crate::blink::Blink,
     touched: Arc<AtomicBool>,
 }
@@ -58,14 +55,28 @@ impl State {
     fn start(this: &mut Option<State>) -> Arc<AtomicBool> {
         match this {
             None => {
-                #[cfg(not(feature = "fingerprint"))]
-                let button = button::Listener::new(0, Handler).unwrap();
-                #[cfg(feature = "fingerprint")]
-                let button = button::Listener::new(Handler).unwrap();
                 let blink = crate::blink::Blink::new_ms(500);
                 let touched = Arc::new(AtomicBool::new(false));
+
+                // 1. Lấy giá trị ngẫu nhiên từ Wasefire RNG
+                let mut rand_bytes = [0u8; 4];
+                wasefire::rng::fill_bytes(&mut rand_bytes).unwrap();
+                let random_val = u32::from_le_bytes(rand_bytes);
+
+                // 2. Tính toán thời gian delay ngẫu nhiên từ 0 đến 3000ms (3s)
+                let delay_ms = (random_val % 3001) as usize;
+
+                // 3. Khởi tạo Timer để kích hoạt event sau khoảng delay ngẫu nhiên
+                let timer = Timer::new(
+                    Handler,
+                    timer::Mode::Oneshot {
+                        duration_ms: delay_ms,
+                    },
+                );
+                timer.start();
+
                 *this = Some(State {
-                    button,
+                    _timer: timer,
                     _blink: blink,
                     touched: touched.clone(),
                 });
@@ -79,22 +90,15 @@ impl State {
         let Some(state) = this.take() else {
             unreachable!()
         };
-        state.button.stop();
         state.touched.store(true, Relaxed);
     }
 }
 
 struct Handler;
 
-impl button::Handler for Handler {
-    #[cfg(not(feature = "fingerprint"))]
-    fn event(&self, state: button::State) {
-        if matches!(state, button::State::Pressed) {
-            State::touch(&mut STATE.lock());
-        }
-    }
-    #[cfg(feature = "fingerprint")]
+impl timer::Handler for Handler {
     fn event(&self) {
+        // Tự động kích hoạt trạng thái "Touch" khi Timer đếm xong
         State::touch(&mut STATE.lock());
     }
 }
