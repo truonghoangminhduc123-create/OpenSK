@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use core::sync::atomic::Ordering::Relaxed;
+use core::time::Duration;
 
 use portable_atomic_util::Arc;
 use wasefire::sync::{AtomicBool, Mutex};
 use wasefire::timer::{self, Mode, Timer};
-use core::time::Duration;
 
 pub(crate) struct Touch {
     touched: Arc<AtomicBool>,
@@ -67,7 +67,7 @@ impl State {
                 // 2. Tính delay ngẫu nhiên từ 0 đến 3000ms
                 let delay_ms = (random_val % 3001) as u64;
 
-                // 3. Khởi tạo Timer theo API mới của Wasefire
+                // 3. Khởi tạo Timer
                 let timer = Timer::new(Handler);
                 timer.start(Mode::Oneshot, Duration::from_millis(delay_ms));
 
