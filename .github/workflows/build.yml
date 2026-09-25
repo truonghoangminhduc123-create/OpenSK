@@ -1,29 +1,50 @@
-name: Build OpenSK Firmware
+name: Build OpenSK UF2 Firmware
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-uf2:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
-      - name: Setup Rust Target
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies & uf2conv
         run: |
           rustup target add thumbv7em-none-eabihf
+          python -m pip install --upgrade pip
+          pip install uf2conv
 
-      - name: Build Firmware
+      - name: Setup OpenSK Environment
         run: |
-          cargo build --release
+          ./setup.sh
 
-      - name: Upload Firmware Artifacts
+      - name: Build Firmware Binary
+        run: |
+          # Biên dịch trực tiếp mục tiêu nRF52840
+          cargo build --release --target thumbv7em-none-eabihf
+
+      - name: Convert to UF2 Format
+        run: |
+          mkdir -p dist
+          # Tải trực tiếp script uf2conv từ Adafruit nếu chưa có
+          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py
+          
+          # Tìm file .elf / .hex trong target và convert sang .uf2 (Family ID nRF52840: 0xada52840)
+          python3 uf2conv.py target/thumbv7em-none-eabihf/release/opensk-wasefire -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2 || \
+          python3 uf2conv.py target/thumbv7em-none-eabihf/release/opensk -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
+
+      - name: Upload UF2 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opensk-nrf52840-firmware
-          path: |
-            target/release/*
-            target/thumbv7em-none-eabihf/release/*
+          name: OpenSK-nRF52840-Firmware-UF2
+          path: dist/opensk_nrf52840_autoconfirm.uf2
