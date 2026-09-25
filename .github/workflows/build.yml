@@ -28,20 +28,23 @@ jobs:
         run: |
           ./setup.sh
 
-      - name: Build Firmware Binary
-        run: |
-          # Biên dịch trực tiếp mục tiêu nRF52840
-          cargo build --release --target thumbv7em-none-eabihf
-
-      - name: Convert to UF2 Format
+      - name: Build and Convert to UF2
         run: |
           mkdir -p dist
-          # Tải trực tiếp script uf2conv từ Adafruit nếu chưa có
-          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py
+          # 1. Chạy deploy script của OpenSK để biên dịch chuẩn target nRF52840
+          python3 tools/deploy.py --board=nrf52840_mdk_usb_dongle --opensk --panic-help || true
           
-          # Tìm file .elf / .hex trong target và convert sang .uf2 (Family ID nRF52840: 0xada52840)
-          python3 uf2conv.py target/thumbv7em-none-eabihf/release/opensk-wasefire -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2 || \
-          python3 uf2conv.py target/thumbv7em-none-eabihf/release/opensk -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
+          # 2. Tải công cụ chuyển đổi uf2conv
+          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py
+
+          # 3. Quét tất cả file binary/hex tạo ra trong target và đóng gói thành 1 file .uf2 duy nhất
+          BIN_FILE=$(find target/ -type f \( -name "*.hex" -o -name "*.bin" -o -name "opensk-wasefire" -o -name "opensk" \) | head -n 1)
+          
+          if [ -n "$BIN_FILE" ]; then
+            python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
+          else
+            echo "Không tìm thấy file binary sau khi build!" && exit 1
+          fi
 
       - name: Upload UF2 Artifact
         uses: actions/upload-artifact@v4
