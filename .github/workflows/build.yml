@@ -21,7 +21,6 @@ jobs:
       - name: Setup Toolchain & Dependencies
         run: |
           rustup target add thumbv7em-none-eabihf
-          # Tải trực tiếp script uf2conv.py chuẩn của Microsoft/Adafruit
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
 
       - name: Setup OpenSK Environment
@@ -31,16 +30,19 @@ jobs:
       - name: Build and Convert to UF2
         run: |
           mkdir -p dist
-          # 1. Chạy deploy script của OpenSK để biên dịch target nRF52840
-          python3 tools/deploy.py --board=nrf52840_mdk_usb_dongle --opensk --panic-help || true
           
-          # 2. Tìm file binary/hex tạo ra và convert sang .uf2 (Family ID nRF52840: 0xada52840)
-          BIN_FILE=$(find target/ -type f \( -name "*.hex" -o -name "*.bin" -o -name "opensk-wasefire" -o -name "opensk" \) | head -n 1)
-          
+          # Biên dịch trực tiếp OpenSK target ARM Cortex-M4 (nRF52840)
+          cargo build --release --target thumbv7em-none-eabihf
+
+          # Tìm file ELF/binary tạo ra trong thư mục target release
+          BIN_FILE=$(find target/thumbv7em-none-eabihf/release/ -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" | head -n 1)
+
           if [ -n "$BIN_FILE" ]; then
+            echo "Đã tìm thấy file binary: $BIN_FILE"
+            # Chuyển đổi sang UF2 với Family ID nRF52840 (0xada52840) và Base Address 0x26000
             python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
           else
-            echo "Không tìm thấy file binary sau khi build!" && exit 1
+            echo "Không tìm thấy file binary trong target/" && exit 1
           fi
 
       - name: Upload UF2 Artifact
