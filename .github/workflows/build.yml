@@ -18,11 +18,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies & uf2conv
+      - name: Setup Toolchain & Dependencies
         run: |
           rustup target add thumbv7em-none-eabihf
-          python -m pip install --upgrade pip
-          pip install uf2conv
+          # Tải trực tiếp script uf2conv.py chuẩn của Microsoft/Adafruit
+          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
 
       - name: Setup OpenSK Environment
         run: |
@@ -31,13 +31,10 @@ jobs:
       - name: Build and Convert to UF2
         run: |
           mkdir -p dist
-          # 1. Chạy deploy script của OpenSK để biên dịch chuẩn target nRF52840
+          # 1. Chạy deploy script của OpenSK để biên dịch target nRF52840
           python3 tools/deploy.py --board=nrf52840_mdk_usb_dongle --opensk --panic-help || true
           
-          # 2. Tải công cụ chuyển đổi uf2conv
-          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py
-
-          # 3. Quét tất cả file binary/hex tạo ra trong target và đóng gói thành 1 file .uf2 duy nhất
+          # 2. Tìm file binary/hex tạo ra và convert sang .uf2 (Family ID nRF52840: 0xada52840)
           BIN_FILE=$(find target/ -type f \( -name "*.hex" -o -name "*.bin" -o -name "opensk-wasefire" -o -name "opensk" \) | head -n 1)
           
           if [ -n "$BIN_FILE" ]; then
