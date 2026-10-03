@@ -35,16 +35,18 @@ jobs:
           # 1. Biên dịch dự án
           cargo build --release --target thumbv7em-none-eabihf
 
-          # 2. Tìm file binary thực tế trong thư mục release (bỏ qua file .d, .rlib, .cargo-lock, v.v.)
-          BIN_FILE=$(find target/thumbv7em-none-eabihf/release/ -maxdepth 1 -type f ! -name "*.*" ! -name ".*" | head -n 1)
+          # 2. Gán đường dẫn file executable chính xác từ log build (opensk-wasefire)
+          BIN_FILE="target/thumbv7em-none-eabihf/release/opensk-wasefire"
 
-          echo "File binary tìm thấy: $BIN_FILE"
-
-          if [ -z "$BIN_FILE" ]; then
-            echo "Không tìm thấy file binary!" && exit 1
+          if [ ! -f "$BIN_FILE" ]; then
+            echo "Lỗi: File binary không tồn tại tại $BIN_FILE"
+            ls -la target/thumbv7em-none-eabihf/release/
+            exit 1
           fi
 
-          # 3. Chuyển đổi sang UF2
+          echo "Đã tìm thấy file binary: $BIN_FILE"
+
+          # 3. Chuyển đổi sang UF2 (Family ID nRF52840: 0xada52840)
           python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
 
       - name: Upload UF2 Artifact
