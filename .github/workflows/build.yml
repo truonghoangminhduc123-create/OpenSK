@@ -21,7 +21,6 @@ jobs:
       - name: Setup Toolchain & Download Converter
         run: |
           rustup target add thumbv7em-none-eabihf
-          # Tải cả script uf2conv.py lẫn file uf2families.json từ Microsoft
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2families.json -O uf2families.json
 
@@ -36,13 +35,14 @@ jobs:
           # 1. Biên dịch dự án
           cargo build --release --target thumbv7em-none-eabihf
 
-          # 2. Định vị chính xác file executable (bỏ qua file ẩn như .cargo-lock)
-          BIN_FILE="target/thumbv7em-none-eabihf/release/opensk-wasefire"
-          if [ ! -f "$BIN_FILE" ]; then
-            BIN_FILE="target/thumbv7em-none-eabihf/release/opensk"
-          fi
+          # 2. Tìm file binary thực tế trong thư mục release (bỏ qua file .d, .rlib, .cargo-lock, v.v.)
+          BIN_FILE=$(find target/thumbv7em-none-eabihf/release/ -maxdepth 1 -type f ! -name "*.*" ! -name ".*" | head -n 1)
 
-          echo "Đã xác định file binary: $BIN_FILE"
+          echo "File binary tìm thấy: $BIN_FILE"
+
+          if [ -z "$BIN_FILE" ]; then
+            echo "Không tìm thấy file binary!" && exit 1
+          fi
 
           # 3. Chuyển đổi sang UF2
           python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
