@@ -18,10 +18,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Setup Toolchain & Dependencies
+      - name: Setup Toolchain & Download Converter
         run: |
           rustup target add thumbv7em-none-eabihf
+          # Tải cả script uf2conv.py lẫn file uf2families.json từ Microsoft
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
+          wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2families.json -O uf2families.json
 
       - name: Setup OpenSK Environment
         run: |
@@ -31,19 +33,19 @@ jobs:
         run: |
           mkdir -p dist
           
-          # Biên dịch trực tiếp OpenSK target ARM Cortex-M4 (nRF52840)
+          # 1. Biên dịch dự án
           cargo build --release --target thumbv7em-none-eabihf
 
-          # Tìm file ELF/binary tạo ra trong thư mục target release
-          BIN_FILE=$(find target/thumbv7em-none-eabihf/release/ -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" | head -n 1)
-
-          if [ -n "$BIN_FILE" ]; then
-            echo "Đã tìm thấy file binary: $BIN_FILE"
-            # Chuyển đổi sang UF2 với Family ID nRF52840 (0xada52840) và Base Address 0x26000
-            python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
-          else
-            echo "Không tìm thấy file binary trong target/" && exit 1
+          # 2. Định vị chính xác file executable (bỏ qua file ẩn như .cargo-lock)
+          BIN_FILE="target/thumbv7em-none-eabihf/release/opensk-wasefire"
+          if [ ! -f "$BIN_FILE" ]; then
+            BIN_FILE="target/thumbv7em-none-eabihf/release/opensk"
           fi
+
+          echo "Đã xác định file binary: $BIN_FILE"
+
+          # 3. Chuyển đổi sang UF2
+          python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
 
       - name: Upload UF2 Artifact
         uses: actions/upload-artifact@v4
