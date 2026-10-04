@@ -1,4 +1,3 @@
-```yaml
 name: Build OpenSK nRF52840 SuperMini UF2
 
 on:
