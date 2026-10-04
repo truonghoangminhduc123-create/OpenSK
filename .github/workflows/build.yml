@@ -1,3 +1,4 @@
+```yaml
 name: Build OpenSK nRF52840 SuperMini UF2
 
 on:
@@ -5,13 +6,9 @@ on:
     branches:
       - main
       - develop
-    paths:
-      - "**/*.rs"
-      - "**/*.toml"
-      - "**/*.x"
-      - "setup.sh"
-      - ".github/workflows/build.yml"
+
   pull_request:
+
   workflow_dispatch:
 
 permissions:
@@ -24,24 +21,92 @@ jobs:
 
     env:
       RUST_BACKTRACE: "1"
+
+      # Adafruit nRF52840 UF2 family
       UF2_FAMILY: "0xada52840"
+
+      # Application start address
       UF2_BASE: "0x26000"
 
     steps:
-      # ------------------------------------------------------------
-      # 1. Checkout OpenSK + Wasefire submodules
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # 1. CHECKOUT OPENSK + WASEFIRE SUBMODULE
+      # ============================================================
+
       - name: Checkout OpenSK
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      # ------------------------------------------------------------
-      # 2. Install native dependencies
-      # ------------------------------------------------------------
-      - name: Install build dependencies
+      # ============================================================
+      # 2. SHOW REPOSITORY / SUBMODULE STATE
+      #
+      # IMPORTANT:
+      # Do NOT use:
+      #
+      #   git -C third_party/wasefire rev-parse HEAD
+      #
+      # because Wasefire is a submodule and its checkout state
+      # is already controlled by the parent repository.
+      # ============================================================
+
+      - name: Verify repository and Wasefire
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "OpenSK repository"
+          echo "============================================================"
+
+          git rev-parse HEAD
+
+          echo
+          echo "============================================================"
+          echo "Git submodules"
+          echo "============================================================"
+
+          git submodule status || true
+
+          echo
+          echo "============================================================"
+          echo "Wasefire directory"
+          echo "============================================================"
+
+          if [ ! -d third_party/wasefire ]; then
+            echo "ERROR: third_party/wasefire does not exist."
+            exit 1
+          fi
+
+          if [ ! -f third_party/wasefire/Cargo.toml ]; then
+            echo "ERROR: third_party/wasefire/Cargo.toml does not exist."
+            echo
+            echo "Directory contents:"
+            find third_party/wasefire -maxdepth 2 -type f | head -100 || true
+            exit 1
+          fi
+
+          echo "Wasefire directory: OK"
+          echo "Wasefire Cargo.toml: OK"
+
+          echo
+          echo "============================================================"
+          echo "Wasefire Cargo.toml"
+          echo "============================================================"
+
+          sed -n '1,80p' third_party/wasefire/Cargo.toml
+
+      # ============================================================
+      # 3. INSTALL NATIVE BUILD DEPENDENCIES
+      # ============================================================
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -52,129 +117,252 @@ jobs:
             libssl-dev \
             libudev-dev \
             python3 \
-            python3-pip
+            python3-pip \
+            curl \
+            git
 
-      # ------------------------------------------------------------
-      # 3. Install the exact Wasefire Rust toolchain
+      # ============================================================
+      # 4. INSTALL THE TOOLCHAIN SPECIFIED BY OPENSK
       #
-      # Wasefire currently pins:
-      # nightly-2026-08-04
+      # rust-toolchain.toml in this repository currently says:
+      #
+      # nightly-2026-06-03
+      #
+      # with:
+      #
       # thumbv7em-none-eabi
-      # ------------------------------------------------------------
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install nightly-2026-08-04 \
-            --profile minimal \
-            --component rust-src \
-            --component llvm-tools \
-            --component rustfmt \
-            --target thumbv7em-none-eabi
+      #
+      # DO NOT override this with another nightly date.
+      # ============================================================
 
-          rustup default nightly-2026-08-04
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "Repository Rust toolchain"
+          echo "============================================================"
+
+          cat rust-toolchain.toml
+
+          echo
+          echo "Installing toolchain from rust-toolchain.toml..."
+
+          rustup show active-toolchain
+
+          rustup target add thumbv7em-none-eabi
+
+          echo
+          echo "============================================================"
+          echo "Rust versions"
+          echo "============================================================"
+
+          rustc --version
+          cargo --version
+          rustup --version
+
+          echo
+          echo "============================================================"
+          echo "Installed targets"
+          echo "============================================================"
 
           rustup target list --installed
 
-      # ------------------------------------------------------------
-      # 4. Verify repository/submodule state
-      # ------------------------------------------------------------
-      - name: Verify OpenSK and Wasefire
+      # ============================================================
+      # 5. VERIFY REQUIRED RUST TARGET
+      # ============================================================
+
+      - name: Verify ARM target
+        shell: bash
         run: |
-          test -d third_party/wasefire
-          test -f third_party/wasefire/Cargo.toml
+          set -euo pipefail
 
-          echo "OpenSK:"
-          git rev-parse HEAD
+          rustup target list --installed \
+            | grep -Fx "thumbv7em-none-eabi"
 
-          echo
-          echo "Wasefire:"
-          git -C third_party/wasefire rev-parse HEAD
+          echo "thumbv7em-none-eabi: OK"
 
-      # ------------------------------------------------------------
-      # 5. Install Wasefire's own dependencies
-      # ------------------------------------------------------------
-      - name: Setup Wasefire
-        working-directory: third_party/wasefire
-        run: |
-          ./scripts/setup.sh -y
-
-      # ------------------------------------------------------------
-      # 6. IMPORTANT:
+      # ============================================================
+      # 6. INSTALL / SET UP WASEFIRE
       #
-      # OpenSK's applet is NOT itself an executable.
+      # OpenSK is built as a native Wasefire applet.
       #
-      # cargo build --release ... only gives:
+      # cargo build on OpenSK alone produces:
       #
       #   libopensk_wasefire.rlib
       #
-      # We therefore build:
-      #
-      #   OpenSK applet
-      #        ↓
-      #   Wasefire runner-nordic
-      #        ↓
-      #   final ELF
-      #
-      # Also patch the Nordic linker layout so the generated
-      # firmware starts at 0x26000, which is the application
-      # address expected by the Adafruit UF2 bootloader.
-      # ------------------------------------------------------------
-      - name: Configure Adafruit UF2 memory layout
+      # That is NOT the final firmware.
+      # ============================================================
+
+      - name: Setup Wasefire
+        shell: bash
         working-directory: third_party/wasefire
         run: |
-          cp crates/runner-nordic/board-dongle.x \
-             crates/runner-nordic/board-dongle.x.original
+          set -euo pipefail
 
-          cat > crates/runner-nordic/board-dongle.x <<'EOF'
-          /* nRF52840 Adafruit UF2 / SuperMini layout
+          if [ -f scripts/setup.sh ]; then
+            chmod +x scripts/setup.sh
+            ./scripts/setup.sh -y
+          else
+            echo "No Wasefire scripts/setup.sh found."
+            echo "Continuing because required Rust/native dependencies"
+            echo "are already installed by the workflow."
+          fi
+
+      # ============================================================
+      # 7. SHOW WASEFIRE BUILD SYSTEM
+      # ============================================================
+
+      - name: Inspect Wasefire xtask
+        shell: bash
+        working-directory: third_party/wasefire
+        run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "Wasefire directory"
+          echo "============================================================"
+
+          pwd
+
+          echo
+          echo "============================================================"
+          echo "Wasefire Cargo packages"
+          echo "============================================================"
+
+          cargo metadata \
+            --no-deps \
+            --format-version 1 \
+            > /tmp/wasefire-metadata.json
+
+          python3 - <<'PY'
+          import json
+
+          with open("/tmp/wasefire-metadata.json", "r") as f:
+              data = json.load(f)
+
+          for package in data.get("packages", []):
+              print(
+                  package["name"],
+                  package["version"]
+              )
+          PY
+
+      # ============================================================
+      # 8. PATCH MEMORY LAYOUT FOR ADAFRUIT UF2
+      #
+      # Application begins at:
+      #
+      #   0x26000
+      #
+      # This is specifically for the requested Adafruit UF2
+      # bootloader layout.
+      #
+      # NOTE:
+      # We preserve the original file so the build directory
+      # remains easy to inspect.
+      # ============================================================
+
+      - name: Configure nRF52840 UF2 memory layout
+        shell: bash
+        working-directory: third_party/wasefire
+        run: |
+          set -euo pipefail
+
+          LINKER="crates/runner-nordic/board-dongle.x"
+
+          if [ ! -f "$LINKER" ]; then
+            echo "ERROR: Wasefire linker script not found:"
+            echo "$LINKER"
+            echo
+            echo "Searching for Nordic linker files:"
+            find crates -type f \
+              \( -name '*.x' -o -name 'memory.x' \) \
+              -print | sort
+            exit 1
+          fi
+
+          cp "$LINKER" "${LINKER}.original"
+
+          cat > "$LINKER" <<'EOF'
+          /*
+           * OpenSK / Wasefire
            *
-           * Application starts at 0x26000.
+           * nRF52840 Adafruit UF2 layout
            *
-           * We use Wasefire single-sided mode, so only one
-           * platform side is allocated.
+           * Application base:
            *
-           * Flash:
+           *     0x26000
            *
-           *   0x00000 - 0x25FFF : SoftDevice / bootloader
-           *   0x26000 - 0x97FFF : Wasefire platform
-           *   0x98000 - 0xD9FFF : OpenSK applet
-           *   0xDA000 - 0xECFFF : Wasefire storage
-           *   0xED000 - 0xFFFFF : bootloader / reserved
+           * RAM:
            *
-           * The exact usable application/storage sizes are
-           * constrained by the Adafruit nRF52840 UF2 layout.
+           *     0x20000008 .. 0x20040000
+           *
            */
 
-          /* RAM */
           _rstack = 0x20000008;
           _rheap  = 0x20008000;
           _rlimit = 0x20040000;
 
-          /* FLASH */
+          /*
+           * Flash layout
+           *
+           * 0x00000 - 0x25FFF
+           *     bootloader / reserved
+           *
+           * 0x26000
+           *     Wasefire platform
+           *
+           * 0x98000
+           *     OpenSK applet
+           *
+           * 0xDA000
+           *     Wasefire storage
+           *
+           * 0xED000
+           *     reserved
+           */
+
           _platform = 0x00026000;
           _applet   = 0x00098000;
           _store    = 0x000DA000;
           _limit    = 0x000ED000;
           EOF
 
-          echo "=== Patched linker script ==="
-          cat crates/runner-nordic/board-dongle.x
+          echo "============================================================"
+          echo "Patched linker script"
+          echo "============================================================"
 
-      # ------------------------------------------------------------
-      # 7. Build the ACTUAL OpenSK firmware.
+          cat "$LINKER"
+
+      # ============================================================
+      # 9. BUILD THE REAL FIRMWARE
       #
-      # This is intentionally NOT:
+      # IMPORTANT:
+      #
+      # DO NOT run:
       #
       # cargo build --release --target thumbv7em-none-eabihf
       #
-      # Instead Wasefire xtask:
+      # That builds the OpenSK library/applet and results in:
       #
-      #   1. builds OpenSK as native applet
-      #   2. links it into runner-nordic
-      #   3. produces runner-nordic ELF
-      # ------------------------------------------------------------
+      # libopensk_wasefire.rlib
+      #
+      # Instead Wasefire xtask builds the native applet and links
+      # it into runner-nordic.
+      # ============================================================
+
       - name: Build OpenSK Wasefire Nordic firmware
+        shell: bash
         working-directory: third_party/wasefire
         run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "Building OpenSK Wasefire applet"
+          echo "============================================================"
+
           cargo xtask \
             --release \
             --native \
@@ -191,52 +379,119 @@ jobs:
               --features=software-crypto-p256-ecdh \
               --features=software-crypto-p256-ecdsa
 
-      # ------------------------------------------------------------
-      # 8. Find the FINAL ELF.
+      # ============================================================
+      # 10. DEBUG ALL BUILD OUTPUTS
+      # ============================================================
+
+      - name: Inspect build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "Searching target directories"
+          echo "============================================================"
+
+          for dir in \
+            target \
+            third_party/wasefire/target
+          do
+            if [ -d "$dir" ]; then
+              echo
+              echo "----- $dir -----"
+
+              find "$dir" \
+                -type f \
+                \( \
+                  -name 'runner-nordic' \
+                  -o -name 'runner-nordic.elf' \
+                  -o -name '*.elf' \
+                  -o -name '*.hex' \
+                  -o -name '*.bin' \
+                  -o -name '*.rlib' \
+                \) \
+                -print \
+                | sort \
+                | head -300
+            fi
+          done
+
+      # ============================================================
+      # 11. LOCATE FINAL RUNNER ELF
       #
-      # Wasefire's xtask normally places it here:
+      # Prefer:
       #
-      # third_party/wasefire/
-      #   target/thumbv7em-none-eabi/release/runner-nordic
+      # third_party/wasefire/target/
+      #   thumbv7em-none-eabi/
+      #     release/
+      #       runner-nordic
       #
-      # But don't hard-code that assumption.
-      # Search both common target roots.
-      # ------------------------------------------------------------
+      # but search all possible target directories.
+      # ============================================================
+
       - name: Locate final ELF
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for Wasefire Nordic ELF..."
+          echo "============================================================"
+          echo "Searching for runner-nordic ELF"
+          echo "============================================================"
+
+          SEARCH_ROOTS=()
+
+          if [ -d "third_party/wasefire/target" ]; then
+            SEARCH_ROOTS+=("third_party/wasefire/target")
+          fi
+
+          if [ -d "target" ]; then
+            SEARCH_ROOTS+=("target")
+          fi
+
+          if [ "${#SEARCH_ROOTS[@]}" -eq 0 ]; then
+            echo "ERROR: No target directory exists."
+            exit 1
+          fi
 
           mapfile -t ELF_FILES < <(
-            find \
-              third_party/wasefire/target \
-              target \
+            find "${SEARCH_ROOTS[@]}" \
               -type f \
               \( \
                 -name 'runner-nordic' \
                 -o -name 'runner-nordic.elf' \
               \) \
-              -print 2>/dev/null | sort -u
+              -print \
+              2>/dev/null \
+              | sort -u
           )
+
+          echo
+          echo "ELF candidates:"
+          printf '%s\n' "${ELF_FILES[@]:-<none>}"
 
           if [ "${#ELF_FILES[@]}" -eq 0 ]; then
             echo
-            echo "ERROR: runner-nordic ELF was not found."
+            echo "ERROR: runner-nordic ELF was not generated."
             echo
-            echo "Possible build outputs:"
-            find third_party/wasefire/target target \
+            echo "All executable-looking files:"
+            find "${SEARCH_ROOTS[@]}" \
               -type f \
-              \( -name '*.elf' -o -name 'runner-*' \) \
-              -print 2>/dev/null || true
+              \( \
+                -perm -111 \
+                -o -name '*.elf' \
+                -o -name 'runner-*' \
+              \) \
+              -print \
+              2>/dev/null \
+              | sort \
+              | head -300
+
+            echo
+            echo "This means the Wasefire runner build itself failed"
+            echo "or this version of Wasefire uses another output name."
             exit 1
           fi
 
-          echo "Candidates:"
-          printf '  %s\n' "${ELF_FILES[@]}"
-
-          # Prefer the release ARM ELF generated by Wasefire.
           ELF=""
 
           for candidate in "${ELF_FILES[@]}"; do
@@ -251,65 +506,93 @@ jobs:
           fi
 
           echo
-          echo "Selected ELF:"
+          echo "============================================================"
+          echo "FINAL ELF"
+          echo "============================================================"
+
           echo "$ELF"
 
           test -f "$ELF"
 
           echo "OPENSK_ELF=$ELF" >> "$GITHUB_ENV"
 
-      # ------------------------------------------------------------
-      # 9. Validate the ELF.
-      #
-      # We specifically require:
-      #
-      #   ARM
-      #   Cortex-M / Thumb
-      #   nRF52840 firmware layout beginning around 0x26000
-      # ------------------------------------------------------------
-      - name: Validate ELF
+      # ============================================================
+      # 12. VERIFY ELF
+      # ============================================================
+
+      - name: Validate final ELF
+        shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== ELF header ==="
-          arm-none-eabi-readelf -h "$OPENSK_ELF"
+          echo "============================================================"
+          echo "ELF"
+          echo "============================================================"
+
+          file "$OPENSK_ELF"
 
           echo
-          echo "=== ELF sections ==="
-          arm-none-eabi-readelf -S "$OPENSK_ELF"
+          echo "============================================================"
+          echo "ELF HEADER"
+          echo "============================================================"
+
+          arm-none-eabi-readelf \
+            -h \
+            "$OPENSK_ELF"
 
           echo
-          echo "=== ELF program headers ==="
-          arm-none-eabi-readelf -l "$OPENSK_ELF"
+          echo "============================================================"
+          echo "ELF SECTIONS"
+          echo "============================================================"
+
+          arm-none-eabi-readelf \
+            -S \
+            "$OPENSK_ELF"
 
           echo
-          echo "=== ELF architecture check ==="
+          echo "============================================================"
+          echo "ELF PROGRAM HEADERS"
+          echo "============================================================"
 
-          arm-none-eabi-readelf -h "$OPENSK_ELF" \
+          arm-none-eabi-readelf \
+            -l \
+            "$OPENSK_ELF"
+
+          echo
+          echo "============================================================"
+          echo "ENTRY POINT"
+          echo "============================================================"
+
+          arm-none-eabi-readelf \
+            -h \
+            "$OPENSK_ELF" \
             | grep -E \
               'Class:|Data:|Machine:|Entry point address:'
 
-      # ------------------------------------------------------------
-      # 10. Convert ELF -> HEX and BIN.
-      #
-      # HEX preserves the actual linked flash addresses.
-      #
-      # BIN is used for uf2conv.py because that lets us explicitly
-      # pass:
-      #
-      #   -b 0x26000
-      #   -f 0xada52840
-      # ------------------------------------------------------------
+      # ============================================================
+      # 13. ELF -> HEX + BIN
+      # ============================================================
+
       - name: Convert ELF to HEX and BIN
+        shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p artifacts
 
+          echo "============================================================"
+          echo "ELF -> HEX"
+          echo "============================================================"
+
           arm-none-eabi-objcopy \
             -O ihex \
             "$OPENSK_ELF" \
             artifacts/opensk_nrf52840.hex
+
+          echo
+          echo "============================================================"
+          echo "ELF -> BIN"
+          echo "============================================================"
 
           arm-none-eabi-objcopy \
             -O binary \
@@ -317,14 +600,19 @@ jobs:
             "$OPENSK_ELF" \
             artifacts/opensk_nrf52840.bin
 
+          echo
           echo "Generated files:"
           ls -lh artifacts/
 
-      # ------------------------------------------------------------
-      # 11. Download official uf2conv.py
-      # ------------------------------------------------------------
-      - name: Get uf2conv.py
+      # ============================================================
+      # 14. GET UF2CONV
+      # ============================================================
+
+      - name: Download uf2conv.py
+        shell: bash
         run: |
+          set -euo pipefail
+
           curl -fsSL \
             https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py \
             -o uf2conv.py
@@ -333,44 +621,71 @@ jobs:
 
           python3 uf2conv.py --help
 
-      # ------------------------------------------------------------
-      # 12. BIN -> UF2
+      # ============================================================
+      # 15. BIN -> UF2
       #
-      # EXACT requested parameters:
+      # EXACT REQUEST:
       #
-      #   -b 0x26000
-      #   -f 0xada52840
-      #
-      # -c = convert only, don't try to flash a USB drive.
-      # ------------------------------------------------------------
+      #   base address = 0x26000
+      #   family ID     = 0xada52840
+      # ============================================================
+
       - name: Convert firmware to UF2
+        shell: bash
         run: |
           set -euo pipefail
+
+          echo "============================================================"
+          echo "BIN -> UF2"
+          echo "============================================================"
 
           python3 uf2conv.py \
             artifacts/opensk_nrf52840.bin \
             -c \
-            -b "$UF2_BASE" \
-            -f "$UF2_FAMILY" \
+            -b 0x26000 \
+            -f 0xada52840 \
             -o artifacts/opensk_nrf52840_autoconfirm.uf2
 
-          test -s artifacts/opensk_nrf52840_autoconfirm.uf2
+          test -s \
+            artifacts/opensk_nrf52840_autoconfirm.uf2
 
           echo
-          echo "=== UF2 info ==="
+          echo "============================================================"
+          echo "UF2 FILE"
+          echo "============================================================"
+
+          ls -lh \
+            artifacts/opensk_nrf52840_autoconfirm.uf2
+
+      # ============================================================
+      # 16. VERIFY UF2
+      # ============================================================
+
+      - name: Validate UF2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "============================================================"
+          echo "UF2 INFORMATION"
+          echo "============================================================"
 
           python3 uf2conv.py \
             artifacts/opensk_nrf52840_autoconfirm.uf2 \
             -i
 
           echo
-          echo "=== Final artifacts ==="
-          ls -lh artifacts/
+          echo "============================================================"
+          echo "ARTIFACTS"
+          echo "============================================================"
 
-      # ------------------------------------------------------------
-      # 13. Upload all useful build outputs.
-      # ------------------------------------------------------------
-      - name: Upload UF2 artifact
+          ls -lah artifacts/
+
+      # ============================================================
+      # 17. UPLOAD
+      # ============================================================
+
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: opensk-nrf52840-supermini
@@ -379,3 +694,4 @@ jobs:
             artifacts/opensk_nrf52840_autoconfirm.uf2
             artifacts/opensk_nrf52840.hex
             artifacts/opensk_nrf52840.bin
+```
