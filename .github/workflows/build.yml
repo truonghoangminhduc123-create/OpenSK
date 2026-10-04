@@ -13,7 +13,7 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: Setup Python
+      - name: Setup Python & LLVM Tools
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -21,6 +21,7 @@ jobs:
       - name: Setup Toolchain & Download Converter
         run: |
           rustup target add thumbv7em-none-eabihf
+          rustup component add llvm-tools-preview
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
           wget -q https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2families.json -O uf2families.json
 
@@ -32,22 +33,21 @@ jobs:
         run: |
           mkdir -p dist
           
-          # 1. Biên dịch dự án
-          cargo build --release --target thumbv7em-none-eabihf
+          # 1. Biên dịch dự án bao gồm cả các binary / ví dụ
+          cargo build --release --target thumbv7em-none-eabihf --bins --examples || cargo build --release --target thumbv7em-none-eabihf
 
-          # 2. Gán đường dẫn file executable chính xác từ log build (opensk-wasefire)
-          BIN_FILE="target/thumbv7em-none-eabihf/release/opensk-wasefire"
+          # 2. Tìm file ELF executable thực tế nằm trong thư mục deps
+          ELF_FILE=$(find target/thumbv7em-none-eabihf/release/deps/ -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.rmeta" ! -name "*.so" | head -n 1)
 
-          if [ ! -f "$BIN_FILE" ]; then
-            echo "Lỗi: File binary không tồn tại tại $BIN_FILE"
-            ls -la target/thumbv7em-none-eabihf/release/
+          if [ -z "$ELF_FILE" ]; then
+            echo "Lỗi: Không tìm thấy file ELF executable nào trong target/deps!"
             exit 1
           fi
 
-          echo "Đã tìm thấy file binary: $BIN_FILE"
+          echo "Đã tìm thấy file ELF: $ELF_FILE"
 
-          # 3. Chuyển đổi sang UF2 (Family ID nRF52840: 0xada52840)
-          python3 uf2conv.py "$BIN_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
+          # 3. Chuyển đổi sang UF2 (Family ID nRF52840: 0xada52840, Base Address: 0x26000)
+          python3 uf2conv.py "$ELF_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
 
       - name: Upload UF2 Artifact
         uses: actions/upload-artifact@v4
