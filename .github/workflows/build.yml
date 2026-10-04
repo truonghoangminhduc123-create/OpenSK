@@ -13,12 +13,12 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: Setup Python & Dependencies
+      - name: Setup Python & Toolchain
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Setup Toolchain & Download Converter
+      - name: Install Rust Targets & Wasefire CLI
         run: |
           rustup target add thumbv7em-none-eabihf
           rustup target add wasm32-unknown-unknown
@@ -29,33 +29,36 @@ jobs:
         run: |
           ./setup.sh
 
-      - name: Build and Convert to UF2
+      - name: Build Firmware and Package UF2
         run: |
           mkdir -p dist
           
-          # 1. Thử build thông qua runner board nRF52840 nếu có sẵn trong repo Wasefire / OpenSK
-          if [ -d "third_party/wasefire" ]; then
-            # Build applet Wasefire
-            cargo build --release --target thumbv7em-none-eabihf --manifest-path third_party/wasefire/Cargo.toml || true
+          # 1. Biên dịch Runner/Applet OpenSK
+          # Tìm file Cargo.toml của Wasefire runner cho nRF52840
+          RUNNER_TOML=$(find third_party/wasefire/ -name "Cargo.toml" | grep -E "nrf52840|nordic" | head -n 1)
+
+          if [ -n "$RUNNER_TOML" ]; then
+            echo "Biên dịch với Wasefire Runner: $RUNNER_TOML"
+            cargo build --release --target thumbv7em-none-eabihf --manifest-path "$RUNNER_TOML"
+          else
+            echo "Biên dịch toàn bộ workspace..."
+            cargo build --release --target thumbv7em-none-eabihf --workspace || cargo build --release --target thumbv7em-none-eabihf
           fi
 
-          # Build toàn bộ workspace bao gồm các example runner
-          cargo build --release --target thumbv7em-none-eabihf --workspace
-
-          # 2. Tìm tất cả file ELF hoặc HEX được tạo ra
-          ELF_FILE=$(find target/ -type f \( -name "*.elf" -o -name "*.hex" -o -name "opensk*" -o -name "runner*" \) ! -name "*.d" ! -name "*.rlib" ! -name "*.rmeta" | head -n 1)
+          # 2. Tìm file ELF executable thực tế
+          ELF_FILE=$(find target/thumbv7em-none-eabihf/release/ -maxdepth 2 -type f -executable ! -name "*.so" ! -name "*.rlib" ! -name "*.d" | head -n 1)
 
           if [ -z "$ELF_FILE" ]; then
-            # Nếu không tìm thấy ELF, liệt kê toàn bộ thư mục target để kiểm tra cấu trúc
-            echo "--- Danh sách file trong target/ ---"
-            find target/ -type f | head -n 30
-            echo "-----------------------------------"
-            exit 1
+            ELF_FILE=$(find target/thumbv7em-none-eabihf/release/deps/ -type f ! -name "*.*" ! -name ".*" | head -n 1)
           fi
 
-          echo "Đã tìm thấy file build: $ELF_FILE"
+          if [ -z "$ELF_FILE" ]; then
+            echo "Lỗi: Không tìm thấy file binary executable!" && exit 1
+          fi
 
-          # 3. Chuyển đổi sang UF2 (Family ID nRF52840: 0xada52840)
+          echo "Đã tìm thấy file binary: $ELF_FILE"
+
+          # 3. Chuyển đổi sang file UF2 (Family ID nRF52840: 0xada52840, Base Address: 0x26000)
           python3 uf2conv.py "$ELF_FILE" -c -b 0x26000 -f 0xada52840 -o dist/opensk_nrf52840_autoconfirm.uf2
 
       - name: Upload UF2 Artifact
