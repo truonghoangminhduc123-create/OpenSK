@@ -693,4 +693,3 @@ jobs:
             artifacts/opensk_nrf52840_autoconfirm.uf2
             artifacts/opensk_nrf52840.hex
             artifacts/opensk_nrf52840.bin
-```
