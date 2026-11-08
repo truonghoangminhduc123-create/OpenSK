@@ -348,10 +348,9 @@ jobs:
           echo "Building OpenSK"
           echo "=============================================="
 
-          /*
-           * The actual command below intentionally uses the
-           * Wasefire xtask interface rather than cargo build.
-           */
+          # The actual command below uses the Wasefire xtask interface
+          # rather than cargo build.
+          # Note: --single-sided is intentionally omitted (not supported).
 
           "$XTASK_BINARY" \
             --release \
@@ -361,7 +360,6 @@ jobs:
             --features=ctap1,config-command \
             runner nordic \
               --board=dongle \
-              --single-sided \
               --opt-level=z \
               --features=usb-ctap \
               --features=software-crypto-aes256-cbc \
