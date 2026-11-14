@@ -128,7 +128,7 @@ jobs:
             --opt-level=z \
             --features=ctap1,config-command \
             runner nordic \
-              --board=dongle \
+              --board=makerdiary \
               --opt-level=z \
               --features=usb-ctap \
               --features=software-crypto-aes256-cbc \
