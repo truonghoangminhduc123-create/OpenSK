@@ -12,88 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use core::sync::atomic::Ordering::Relaxed;
-use core::time::Duration;
-
-use portable_atomic_util::Arc;
-use wasefire::sync::{AtomicBool, Mutex};
-use wasefire::timer::{self, Mode, Timer};
-
-pub(crate) struct Touch {
-    touched: Arc<AtomicBool>,
-}
+pub(crate) struct Touch;
 
 impl Touch {
     pub(crate) fn new() -> Self {
-        Touch {
-            touched: State::start(&mut STATE.lock()),
-        }
+        Touch
     }
 
     pub(crate) fn is_present(&self) -> bool {
-        self.touched.load(Relaxed)
-    }
-}
-
-impl Drop for Touch {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.touched) == 2 {
-            // We're the last object, so we can stop listening.
-            *STATE.lock() = None;
-        }
-    }
-}
-
-static STATE: Mutex<Option<State>> = Mutex::new(None);
-
-struct State {
-    _timer: Timer<Handler>,
-    _blink: crate::blink::Blink,
-    touched: Arc<AtomicBool>,
-}
-
-impl State {
-    fn start(this: &mut Option<State>) -> Arc<AtomicBool> {
-        match this {
-            None => {
-                let blink = crate::blink::Blink::new_ms(500);
-                let touched = Arc::new(AtomicBool::new(false));
-
-                // 1. Lấy giá trị ngẫu nhiên từ RNG
-                let mut rand_bytes = [0u8; 4];
-                wasefire::rng::fill_bytes(&mut rand_bytes).unwrap();
-                let random_val = u32::from_le_bytes(rand_bytes);
-
-                // 2. Tính delay ngẫu nhiên từ 0 đến 3000ms
-                let delay_ms = (random_val % 3001) as u64;
-
-                // 3. Khởi tạo Timer
-                let timer = Timer::new(Handler);
-                timer.start(Mode::Oneshot, Duration::from_millis(delay_ms));
-
-                *this = Some(State {
-                    _timer: timer,
-                    _blink: blink,
-                    touched: touched.clone(),
-                });
-                touched
-            }
-            Some(state) => state.touched.clone(),
-        }
-    }
-
-    fn touch(this: &mut Option<State>) {
-        let Some(state) = this.take() else {
-            unreachable!()
-        };
-        state.touched.store(true, Relaxed);
-    }
-}
-
-struct Handler;
-
-impl timer::Handler for Handler {
-    fn event(&self) {
-        State::touch(&mut STATE.lock());
+        // Luôn trả về true (luôn coi như người dùng đã chạm nút)
+        true
     }
 }
