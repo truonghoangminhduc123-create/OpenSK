@@ -97,12 +97,6 @@ jobs:
 
       # ============================================================
       # RUST TOOLCHAIN
-      #
-      # IMPORTANT:
-      # Let rustup read the repository's rust-toolchain files.
-      #
-      # OpenSK itself currently points to nightly-2026-06-03.
-      # Wasefire has its own rust-toolchain.toml.
       # ============================================================
 
       - name: Install Rust toolchain
@@ -134,9 +128,6 @@ jobs:
 
       # ============================================================
       # WASEFIRE TOOLCHAIN
-      #
-      # Entering third_party/wasefire makes rustup automatically
-      # respect Wasefire's own rust-toolchain.toml.
       # ============================================================
 
       - name: Verify Wasefire Rust toolchain
@@ -178,13 +169,6 @@ jobs:
 
       # ============================================================
       # DISCOVER WASEFIRE WORKSPACE
-      #
-      # Do NOT assume:
-      #
-      # third_party/wasefire/Cargo.toml
-      #
-      # because the current Wasefire checkout does not have one
-      # there.
       # ============================================================
 
       - name: Discover Wasefire Cargo projects
@@ -253,12 +237,6 @@ jobs:
 
       # ============================================================
       # BUILD OPEN SK
-      #
-      # IMPORTANT:
-      #
-      # We first try the repository's normal Wasefire build command.
-      # If the exact xtask location differs, the diagnostic output
-      # above tells us where it is.
       # ============================================================
 
       - name: Build OpenSK Wasefire firmware
@@ -347,10 +325,6 @@ jobs:
           echo "=============================================="
           echo "Building OpenSK"
           echo "=============================================="
-
-          # The actual command below uses the Wasefire xtask interface
-          # rather than cargo build.
-          # Note: --single-sided is intentionally omitted (not supported).
 
           "$XTASK_BINARY" \
             --release \
@@ -498,18 +472,67 @@ jobs:
           ls -lh artifacts/
 
       # ============================================================
-      # UF2CONV
+      # PREPARE UF2 TOOLS
+      #
+      # uf2conv.py đọc uf2families.json theo CWD (thư mục hiện hành),
+      # nên PHẢI copy cả 2 file từ tools/uf2/ ra repo root.
+      #
+      # Fallback: nếu file trong repo thiếu, tự tải từ Microsoft.
       # ============================================================
 
-      - name: Download uf2conv.py
+      - name: Prepare UF2 tools
         run: |
           set -euo pipefail
 
-          curl -fsSL \
-            https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py \
-            -o uf2conv.py
+          echo "=============================================="
+          echo "Source files in tools/uf2/"
+          echo "=============================================="
+          ls -la tools/uf2/ || true
 
+          # Fallback tải uf2conv.py nếu thiếu trong repo
+          if [ ! -s tools/uf2/uf2conv.py ]; then
+            echo "Fallback: downloading uf2conv.py from Microsoft"
+            mkdir -p tools/uf2
+            curl -fsSL \
+              https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py \
+              -o tools/uf2/uf2conv.py
+          fi
+
+          # Fallback tải uf2families.json nếu thiếu trong repo
+          if [ ! -s tools/uf2/uf2families.json ]; then
+            echo "Fallback: downloading uf2families.json from Microsoft"
+            mkdir -p tools/uf2
+            curl -fsSL \
+              https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2families.json \
+              -o tools/uf2/uf2families.json
+          fi
+
+          # Bắt buộc phải có cả 2 file
+          test -s tools/uf2/uf2conv.py
+          test -s tools/uf2/uf2families.json
+
+          echo
+          echo "=============================================="
+          echo "Copy to CWD (repo root)"
+          echo "=============================================="
+          cp -v tools/uf2/uf2conv.py .
+          cp -v tools/uf2/uf2families.json .
           chmod +x uf2conv.py
+
+          echo
+          echo "=============================================="
+          echo "Verify in CWD"
+          echo "=============================================="
+          ls -lh uf2conv.py uf2families.json
+
+          echo
+          echo "=============================================="
+          echo "Check family nRF52840 present"
+          echo "=============================================="
+          grep -i "ada52840" uf2families.json
+
+          echo
+          echo "UF2 tools ready ✅"
 
       # ============================================================
       # BIN → UF2
@@ -518,6 +541,10 @@ jobs:
       - name: Convert BIN to UF2
         run: |
           set -euo pipefail
+
+          # Sanity check: file JSON phải tồn tại trong CWD
+          test -f uf2families.json
+          test -f uf2conv.py
 
           python3 uf2conv.py \
             artifacts/opensk_nrf52840.bin \
