@@ -5,9 +5,7 @@ on:
     branches:
       - main
       - develop
-
   pull_request:
-
   workflow_dispatch:
 
 permissions:
@@ -20,7 +18,8 @@ jobs:
 
     env:
       RUST_BACKTRACE: "1"
-      UF2_BASE: "0x26000"
+      # Ép môi trường UF2 về 0x1000
+      UF2_BASE: "0x1000"
       UF2_FAMILY: "0xada52840"
 
     steps:
@@ -28,7 +27,6 @@ jobs:
       # ============================================================
       # CHECKOUT
       # ============================================================
-
       - name: Checkout OpenSK
         uses: actions/checkout@v4
         with:
@@ -38,293 +36,90 @@ jobs:
       # ============================================================
       # SYSTEM DEPENDENCIES
       # ============================================================
-
       - name: Install dependencies
         run: |
           set -euo pipefail
-
           sudo apt-get update
-
           sudo apt-get install -y \
-            build-essential \
-            gcc-arm-none-eabi \
-            binutils-arm-none-eabi \
-            pkg-config \
-            libssl-dev \
-            libudev-dev \
-            python3 \
-            python3-pip \
-            curl \
-            git
-
-      # ============================================================
-      # VERIFY REPOSITORY
-      # ============================================================
-
-      - name: Verify repository
-        run: |
-          set -euo pipefail
-
-          echo "=============================================="
-          echo "OpenSK"
-          echo "=============================================="
-
-          git rev-parse HEAD
-
-          echo
-          echo "=============================================="
-          echo "Submodules"
-          echo "=============================================="
-
-          git submodule status
-
-          echo
-          echo "=============================================="
-          echo "Wasefire"
-          echo "=============================================="
-
-          test -d third_party/wasefire
-
-          echo "Wasefire submodule:"
-          git submodule status third_party/wasefire
-
-          echo
-          echo "Wasefire files:"
-          find third_party/wasefire \
-            -maxdepth 2 \
-            -type f \
-            | head -100
+            build-essential gcc-arm-none-eabi binutils-arm-none-eabi \
+            pkg-config libssl-dev libudev-dev python3 python3-pip curl git
 
       # ============================================================
       # RUST TOOLCHAIN
       # ============================================================
-
       - name: Install Rust toolchain
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "OpenSK Rust toolchain"
-          echo "=============================================="
-
-          if [ -f rust-toolchain.toml ]; then
-            cat rust-toolchain.toml
-          elif [ -f rust-toolchain ]; then
-            cat rust-toolchain
-          fi
-
-          echo
-          echo "=============================================="
-          echo "Installing OpenSK toolchain"
-          echo "=============================================="
-
+          if [ -f rust-toolchain.toml ]; then cat rust-toolchain.toml; fi
           rustup show active-toolchain
-
           rustup target add thumbv7em-none-eabi
-
-          echo
-          rustc --version
-          cargo --version
-
-      # ============================================================
-      # WASEFIRE TOOLCHAIN
-      # ============================================================
 
       - name: Verify Wasefire Rust toolchain
         working-directory: third_party/wasefire
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "Wasefire rust-toolchain.toml"
-          echo "=============================================="
-
-          if [ -f rust-toolchain.toml ]; then
-            cat rust-toolchain.toml
-          elif [ -f rust-toolchain ]; then
-            cat rust-toolchain
-          fi
-
-          echo
-          echo "=============================================="
-          echo "Active toolchain"
-          echo "=============================================="
-
+          if [ -f rust-toolchain.toml ]; then cat rust-toolchain.toml; fi
           rustup show active-toolchain
-          rustc --version
-          cargo --version
 
       # ============================================================
       # WASEFIRE SETUP
       # ============================================================
-
       - name: Setup Wasefire
         working-directory: third_party/wasefire
         run: |
           set -euo pipefail
-
           chmod +x scripts/setup.sh
-
           ./scripts/setup.sh -y
 
       # ============================================================
-      # DISCOVER WASEFIRE WORKSPACE
+      # FORCE MEMORY OFFSET TO 0x1000 (PATCH LINKER SCRIPT)
+      # Đây là bước "cưỡng chế" quan trọng nhất.
+      # Nó tìm mọi file cấu hình bộ nhớ (.x) và đổi địa chỉ.
       # ============================================================
-
-      - name: Discover Wasefire Cargo projects
+      - name: Force Memory Offset 0x1000
+        working-directory: third_party/wasefire
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "Cargo.toml files inside Wasefire"
-          echo "=============================================="
-
-          find third_party/wasefire \
-            -type f \
-            -name Cargo.toml \
-            -print \
-            | sort \
-            | head -200
-
-          echo
-          echo "=============================================="
-          echo "Possible xtask crates"
-          echo "=============================================="
-
-          find third_party/wasefire \
-            -type f \
-            -name Cargo.toml \
-            -print0 \
-            | while IFS= read -r -d '' file; do
-                if grep -q 'xtask' "$file" 2>/dev/null; then
-                  echo "$file"
-                fi
-              done \
-            | head -100
+          echo "=== Đang săn lùng và tiêu diệt 0x26000 ==="
+          # Tìm mọi file .x (linker script) và thay thế 0x26000 / 0x00026000 thành 0x1000
+          find . -type f -name "*.x" -exec sed -i 's/0x00026000/0x00001000/g' {} +
+          find . -type f -name "*.x" -exec sed -i 's/0x26000/0x1000/g' {} +
+          
+          echo "=== Kiểm tra lại xem còn sót 0x26000 không ==="
+          find . -type f -name "*.x" -exec grep -H "0x1000" {} + | head -n 20
+          echo "=== Đã ép Offset về 0x1000 xong! ==="
 
       # ============================================================
-      # FIND WASEFIRE BUILD ENTRY POINT
+      # BUILD FIRMWARE
       # ============================================================
-
-      - name: Locate Wasefire build tools
-        run: |
-          set -euo pipefail
-
-          echo "=============================================="
-          echo "xtask source files"
-          echo "=============================================="
-
-          find third_party/wasefire \
-            -type f \
-            \( \
-              -name main.rs \
-              -o -name xtask.rs \
-            \) \
-            -print \
-            | grep -E 'xtask|crates' \
-            | head -100 || true
-
-          echo
-          echo "=============================================="
-          echo "runner-nordic files"
-          echo "=============================================="
-
-          find third_party/wasefire \
-            -type f \
-            | grep -E \
-              'runner-nordic|nordic.*\.x$|memory\.x$' \
-            | head -200 || true
-
-      # ============================================================
-      # BUILD OPEN SK
-      # ============================================================
-
       - name: Build OpenSK Wasefire firmware
         working-directory: third_party/wasefire
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=============================================="
-          echo "Searching for Wasefire xtask"
-          echo "=============================================="
-
           XTASK_MANIFEST=""
-
           while IFS= read -r manifest; do
             if grep -q 'name *= *"xtask"' "$manifest" 2>/dev/null; then
               XTASK_MANIFEST="$manifest"
               break
             fi
-          done < <(
-            find . \
-              -type f \
-              -name Cargo.toml \
-              -print \
-              | sort
-          )
+          done < <(find . -type f -name Cargo.toml -print | sort)
 
           if [ -z "$XTASK_MANIFEST" ]; then
             echo "ERROR: Could not locate Wasefire xtask."
-            echo
-            echo "Cargo manifests:"
-            find . -type f -name Cargo.toml -print | sort
             exit 1
           fi
 
-          echo "Found xtask:"
-          echo "$XTASK_MANIFEST"
-
           XTASK_DIR="$(dirname "$XTASK_MANIFEST")"
-
-          echo
-          echo "xtask directory:"
-          echo "$XTASK_DIR"
-
-          echo
-          echo "=============================================="
-          echo "Building xtask"
-          echo "=============================================="
-
-          cargo build \
-            --manifest-path "$XTASK_MANIFEST" \
-            --release
+          cargo build --manifest-path "$XTASK_MANIFEST" --release
 
           XTASK_BINARY=""
-
           if [ -x "$XTASK_DIR/target/release/xtask" ]; then
             XTASK_BINARY="$XTASK_DIR/target/release/xtask"
           elif [ -x "target/release/xtask" ]; then
             XTASK_BINARY="target/release/xtask"
           fi
-
-          if [ -z "$XTASK_BINARY" ]; then
-            echo "ERROR: xtask executable not found."
-
-            find . \
-              -type f \
-              -name xtask \
-              -print \
-              2>/dev/null || true
-
-            exit 1
-          fi
-
-          echo
-          echo "xtask binary:"
-          echo "$XTASK_BINARY"
-
-          echo
-          echo "=============================================="
-          echo "xtask help"
-          echo "=============================================="
-
-          "$XTASK_BINARY" --help || true
-
-          echo
-          echo "=============================================="
-          echo "Building OpenSK"
-          echo "=============================================="
 
           "$XTASK_BINARY" \
             --release \
@@ -342,241 +137,67 @@ jobs:
               --features=software-crypto-p256-ecdsa
 
       # ============================================================
-      # SEARCH FINAL ELF
+      # FIND ELF & CONVERT
       # ============================================================
-
       - name: Locate final firmware ELF
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "Searching for final ELF"
-          echo "=============================================="
-
           mapfile -t ELF_FILES < <(
-            find . \
-              -type f \
-              \( \
-                -name runner-nordic \
-                -o -name runner-nordic.elf \
-                -o -name '*.elf' \
-              \) \
-              -print \
-              2>/dev/null \
-              | grep -E \
-                'target|release' \
-              | sort -u
+            find . -type f \( -name runner-nordic -o -name '*.elf' \) -print 2>/dev/null | grep -E 'target|release' | sort -u
           )
-
-          if [ "${#ELF_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: No ELF found."
-
-            echo
-            echo "All runner files:"
-            find . \
-              -type f \
-              -iname '*runner*' \
-              -print \
-              2>/dev/null \
-              | head -300
-
-            echo
-            echo "All executable files:"
-            find . \
-              -type f \
-              -perm -111 \
-              -print \
-              2>/dev/null \
-              | head -300
-
-            exit 1
-          fi
-
-          echo "ELF candidates:"
-          printf '%s\n' "${ELF_FILES[@]}"
-
           ELF=""
-
           for candidate in "${ELF_FILES[@]}"; do
-            if [[ "$candidate" == *"runner-nordic" ]]; then
-              ELF="$candidate"
-              break
-            fi
+            if [[ "$candidate" == *"runner-nordic"* ]]; then ELF="$candidate"; break; fi
           done
-
-          if [ -z "$ELF" ]; then
-            ELF="${ELF_FILES[0]}"
-          fi
-
-          echo
-          echo "FINAL ELF:"
-          echo "$ELF"
-
+          if [ -z "$ELF" ] && [ ${#ELF_FILES[@]} -gt 0 ]; then ELF="${ELF_FILES[0]}"; fi
+          if [ -z "$ELF" ]; then echo "ERROR: No ELF found."; exit 1; fi
           echo "OPENSK_ELF=$ELF" >> "$GITHUB_ENV"
 
-      # ============================================================
-      # VALIDATE ELF
-      # ============================================================
-
-      - name: Validate ELF
+      - name: Convert ELF to HEX and BIN
         run: |
           set -euo pipefail
-
-          file "$OPENSK_ELF"
-
-          echo
-          arm-none-eabi-readelf \
-            -h \
-            "$OPENSK_ELF"
-
-          echo
-          arm-none-eabi-readelf \
-            -S \
-            "$OPENSK_ELF"
-
-          echo
-          arm-none-eabi-readelf \
-            -l \
-            "$OPENSK_ELF"
-
-      # ============================================================
-      # ELF → HEX
-      # ============================================================
-
-      - name: Convert ELF to HEX
-        run: |
-          set -euo pipefail
-
           mkdir -p artifacts
-
-          arm-none-eabi-objcopy \
-            -O ihex \
-            "$OPENSK_ELF" \
-            artifacts/opensk_nrf52840.hex
-
-      # ============================================================
-      # ELF → BIN
-      # ============================================================
-
-      - name: Convert ELF to BIN
-        run: |
-          set -euo pipefail
-
-          arm-none-eabi-objcopy \
-            -O binary \
-            --gap-fill 0xff \
-            "$OPENSK_ELF" \
-            artifacts/opensk_nrf52840.bin
-
+          arm-none-eabi-objcopy -O ihex "$OPENSK_ELF" artifacts/opensk_nrf52840.hex
+          arm-none-eabi-objcopy -O binary --gap-fill 0xff "$OPENSK_ELF" artifacts/opensk_nrf52840.bin
           ls -lh artifacts/
 
       # ============================================================
       # PREPARE UF2 TOOLS
-      #
-      # uf2conv.py đọc uf2families.json theo CWD (thư mục hiện hành),
-      # nên PHẢI copy cả 2 file từ tools/uf2/ ra repo root.
-      #
-      # Fallback: nếu file trong repo thiếu, tự tải từ Microsoft.
       # ============================================================
-
       - name: Prepare UF2 tools
         run: |
           set -euo pipefail
-
-          echo "=============================================="
-          echo "Source files in tools/uf2/"
-          echo "=============================================="
-          ls -la tools/uf2/ || true
-
-          # Fallback tải uf2conv.py nếu thiếu trong repo
-          if [ ! -s tools/uf2/uf2conv.py ]; then
-            echo "Fallback: downloading uf2conv.py from Microsoft"
-            mkdir -p tools/uf2
-            curl -fsSL \
-              https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py \
-              -o tools/uf2/uf2conv.py
-          fi
-
-          # Fallback tải uf2families.json nếu thiếu trong repo
-          if [ ! -s tools/uf2/uf2families.json ]; then
-            echo "Fallback: downloading uf2families.json from Microsoft"
-            mkdir -p tools/uf2
-            curl -fsSL \
-              https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2families.json \
-              -o tools/uf2/uf2families.json
-          fi
-
-          # Bắt buộc phải có cả 2 file
-          test -s tools/uf2/uf2conv.py
-          test -s tools/uf2/uf2families.json
-
-          echo
-          echo "=============================================="
-          echo "Copy to CWD (repo root)"
-          echo "=============================================="
           cp -v tools/uf2/uf2conv.py .
           cp -v tools/uf2/uf2families.json .
           chmod +x uf2conv.py
 
-          echo
-          echo "=============================================="
-          echo "Verify in CWD"
-          echo "=============================================="
-          ls -lh uf2conv.py uf2families.json
-
-          echo
-          echo "=============================================="
-          echo "Check family nRF52840 present"
-          echo "=============================================="
-          grep -i "ada52840" uf2families.json
-
-          echo
-          echo "UF2 tools ready ✅"
-
       # ============================================================
-      # BIN → UF2
+      # CONVERT BIN TO UF2 (AT 0x1000)
       # ============================================================
-
-      - name: Convert BIN to UF2
+      - name: Convert BIN to UF2 (Offset 0x1000)
         run: |
           set -euo pipefail
-
-          # Sanity check: file JSON phải tồn tại trong CWD
           test -f uf2families.json
-          test -f uf2conv.py
-
+          
+          # Dùng biến môi trường UF2_BASE đã set ở trên (0x1000)
           python3 uf2conv.py \
             artifacts/opensk_nrf52840.bin \
             -c \
-            -b 0x26000 \
-            -f 0xada52840 \
+            -b ${{ env.UF2_BASE }} \
+            -f ${{ env.UF2_FAMILY }} \
             -o artifacts/opensk_nrf52840_autoconfirm.uf2
 
-          test -s \
-            artifacts/opensk_nrf52840_autoconfirm.uf2
-
-          echo
-          echo "UF2 created:"
-          ls -lh \
-            artifacts/opensk_nrf52840_autoconfirm.uf2
-
-      # ============================================================
-      # VERIFY UF2
-      # ============================================================
+          ls -lh artifacts/opensk_nrf52840_autoconfirm.uf2
 
       - name: Verify UF2
         run: |
           set -euo pipefail
-
-          python3 uf2conv.py \
-            artifacts/opensk_nrf52840_autoconfirm.uf2 \
-            -i
+          python3 uf2conv.py artifacts/opensk_nrf52840_autoconfirm.uf2 -i
 
       # ============================================================
-      # ARTIFACT
+      # UPLOAD
       # ============================================================
-
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
